@@ -55,4 +55,27 @@ Based on issues encountered in other projects:
 
 ## 10. Is this bot guaranteed to be profitable?
 
-No.  Algorithmic trading involves uncertainty, and no system can guarantee profits.  BOTo provides a framework to explore strategies and implement sound risk management.  Its design draws on best practices from multiple open‑source projects, but success ultimately depends on your strategy logic, risk tolerance and market conditions.  Always perform your own research and backtesting.
+No.  Algorithmic trading involves uncertainty, and no system can guarantee profits.  BOTo provides a framework to explore strategies and implement sound risk management.  Its design draws on best practices from multiple open‑source projects, but success ultimately depends on your
+
+## 11. How can BOTO receive signals from TradingView or another platform?
+
+BOTO includes a FastAPI-based microservice in `tradingview_service.py` that exposes a `/webhook` endpoint for TradingView or other alerting systems. The service validates a secret token and then passes order instructions (symbol, action, quantity, order type, limit price) to the IBKRInterface to execute trades. The environment variables `TRADINGVIEW_SECRET`, `DEFAULT_SYMBOL`, and related settings allow you to set defaults. This design was inspired by the pairs-ibkr project, which supports TradingView webhooks and pair-specific orders【289461129736191†L270-L294】.
+
+You can deploy this microservice independently (e.g., via Uvicorn) and configure TradingView webhook alerts to post to the service's endpoint with a JSON payload. See `README.md` for details.
+
+## 12. Can BOTO trade regular stocks or other instruments?
+
+Yes. Although the initial examples use a simple SMA crossover strategy, the `IBKRInterface` and the risk management modules support placing market or limit orders for any instrument available in IBKR. BOTO's modular architecture draws on features from other projects like trading-bot-framework (which supports multiple asset classes, includes a backtesting engine, and integrates risk controls)【941305120899460†L175-L197】. You can implement your own strategy by subclassing `Strategy` and overriding `on_tick()` to generate signals based on any asset or algorithm. The UI dashboard and TradingView webhook also accept arbitrary symbols.
+
+## 13. How do I use the Streamlit dashboard?
+
+Run the dashboard with `streamlit run paper_trading_boto/dashboard.py`. The dashboard includes:
+
+- **Connection management:** Connect or disconnect from IBKR using environment variables (`TWS_HOST`, `TWS_PORT`, `CLIENT_ID`, `ACCOUNT`).
+- **Manual trading:** Enter a symbol, quantity, and side to place market or limit orders.
+- **Account summary:** Retrieve account value, buying power, margin details, and open positions.
+- **Strategy session:** Run a short SMA crossover session to test the strategy; results appear in the trade history.
+- **Trade history:** View executed trades with timestamps, symbols, actions, quantities, and prices.
+
+This user-friendly interface is designed to help beginners by abstracting away code and offering interactive controls. It's inspired by the trading-bot-framework's modular architecture and the `ibkr_trading_app`'s emphasis on real-time monitoring and reporting【940719045005129†L289-L323】.
+strategy logic, risk tolerance and market conditions.  Always perform your own research and backtesting.
