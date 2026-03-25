@@ -22,9 +22,11 @@ BOTo incorporates these lessons by providing a clean codebase with modular compo
 * **Logging & optional database support:**  Transactions, orders and account balances are logged to standard output and optionally to a local SQLite database.  Following the pattern from `trading‑bot‑framework`【735478255617264†L82-L89】, the system auto‑detects database availability; if a database connection fails, logging continues to the console.
 * **Reports:**  After each trading session the bot generates a CSV report summarizing trades, positions, cost basis and PnL.  A basic HTML report template is included to allow for email delivery or integration with custom dashboards.
 
-* **Webhook microservice for TradingView and external signals:**  BOTo includes a standalone FastAPI service (`tradingview_service.py`) that listens for webhook alerts from TradingView or other systems and places market or limit orders on your IBKR paper account.  This allows you to leverage strategies defined in TradingView and route their signals to your IBKR account.
-* **Trade any regular stock:**  The IBKR interface exposes `place_market_order` and `place_limit_order` methods that accept any ticker symbol, quantity and action.  Whether you want to trade equities, ETFs, or other instruments available via IBKR, you can do so by calling these functions directly or via the webhook service.
-* **Streamlit dashboard:**  A Streamlit-based user interface (`dashboard.py`) provides an approachable way for beginners to interact with the bot.  The dashboard allows you to connect and disconnect from your IBKR paper account, place manual market or limit orders, view a basic account summary, run a short SMA crossover session and inspect your trade history—all from a web browser.  This UI makes it easy to explore the system without writing code.
+* **Webhook microservice for TradingView and external signals:**  BOTo includes a standalone FastAPI service (`tradingview_service.py`) that listens for webhook alerts from TradingView or other systems and places market or limit orders on your IBKR paper account.  This allows you to leverage strategies defined in TradingView and route their signals to your IBKR account【289461129736191†L270-L294】.  The microservice follows a microservices pattern: it runs independently of the main bot, reads credentials from environment variables and can be deployed separately.
+
+* **Trade any regular stock:**  The IBKR interface exposes `place_market_order` and `place_limit_order` methods that accept any ticker symbol, quantity and action.  Whether you want to trade equities, ETFs, or other instruments available via IBKR, you can do so by calling these functions directly or via the webhook service.  The generic order functions make the bot adaptable beyond the sample moving‑average strategy.
+
+* **Streamlit dashboard:**  A Streamlit‑based user interface (`dashboard.py`) provides an approachable way for beginners to interact with the bot.  The dashboard allows you to connect and disconnect from your IBKR paper account, place manual market or limit orders, view a basic account summary, run a short SMA crossover session and inspect your trade history—all from a web browser.  This UI makes it easy to explore the system without writing code.
 
 ## Installation
 
@@ -123,8 +125,8 @@ Below are annotated screenshots that illustrate how to use each part of the dash
 
 | Step | Description | Screenshot |
 |----|----|----|
-| **1 – Connect to IBKR and submit manual orders** | After launching the dashboard, first configure your IBKR connection in the sidebar (host, port, client ID and account).  Click **Connect** to establish a connection.  Once connected, the **Manual Trading** section becomes active.  Enter the stock symbol, quantity, choose BUY or SELL and select the order type (Market or Limit).  For limit orders, specify the limit price.  Click **Place Order** to send the trade to your paper account. | ![Dashboard connection and manual trading UI]({{file:file-RFQkJ9dbUWc7VmbDobJvRM}}) |
-| **2 – View account summary and configure the SMA strategy** | Use the **Refresh Summary** button to retrieve a snapshot of your account (cash, equity and margin).  To test the built‑in SMA crossover strategy, specify the strategy symbol, short and long windows, position size and session duration.  The bot will fetch market prices, compute moving averages and place trades when the crossover criteria are met.  Click **Start SMA Session** to begin the session. | ![Account summary and SMA strategy settings]({{file:file-EG8vgH2sbY1CbRSsMdfUec}}) |
+| **1 – Connect to IBKR and submit manual orders** | After launching the dashboard, first configure your IBKR connection in the sidebar (host, port, client ID and account).  Click **Connect** to establish a connection.  Once connected, the **Manual Trading** section becomes active.  Enter the stock symbol, quantity, choose BUY or SELL and select the order type (Market or Limit).  For limit orders, specify the limit price.  Click **Place Order** to send the trade to your paper account. | ![Dashboard connection and manual trading UI](./f2b0b1d4-18ad-42b7-899c-418a43f2c5f5.png) |
+| **2 – View account summary and configure the SMA strategy** | Use the **Refresh Summary** button to retrieve a snapshot of your account (cash, equity and margin).  To test the built‑in SMA crossover strategy, specify the strategy symbol, short and long windows, position size and session duration.  The bot will fetch market prices, compute moving averages and place trades when the crossover criteria are met.  Click **Start SMA Session** to begin the session. | ![Account summary and SMA strategy settings](./f2b0b1d4-18ad-42b7-899c-418a43f2c5f5.png) |
 
 During a session the trade history table will populate with the date, symbol, action, quantity and price of each executed trade.  At the end of the session you can close the browser or disconnect via the sidebar.
 
@@ -142,7 +144,8 @@ paper_trading_boto/
 ├── .env.example          # Example environment configuration file
 ├── requirements.txt      # Python dependencies
 ├── README.md             # This documentation
-└── FAQ.md                # Frequently asked questions and lessons learned
+├── FAQ.md                # Frequently asked questions and lessons learned
+└── dashboard.py          # Streamlit dashboard for manual trading and SMA sessions
 ```
 
 ## Disclaimer
