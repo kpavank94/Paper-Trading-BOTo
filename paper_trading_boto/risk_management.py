@@ -1,77 +1,118 @@
-"""
-Risk management module for Paper Trading BOTo.
+"""Risk management for Paper Trading BOTo.
 
-This module defines a base class for risk management and a simple
-implementation that controls position size and defines stop‑loss /
-take‑profit thresholds.  It takes inspiration from open‑source
-projects that emphasise position limits, capital preservation and
-drawdown protection【362023408974584†L165-L196】.  Users can extend
-``RiskManager`` to implement custom sizing rules or more complex
-risk controls.
+The original module sized trades as a flat fraction of capital and exited on
+fixed percentage moves, which applies the same stop distance to a utility and
+to a small cap regardless of how much either one actually moves. Sizing is now
+volatility aware and lives in the strategy, while this module owns the
+portfolio level guards that must hold no matter what the signal says:
+
+* a gross exposure ceiling;
+* a per symbol weight ceiling;
+* a drawdown kill switch that flattens the book and stops new entries.
+
+The legacy RiskManager and FixedFractionalRiskManager classes are retained so
+existing custom subclasses keep working.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Dict, Optional
 
 
 class RiskManager:
-    """Abstract base class for risk management."""
+    """Legacy per trade interface. Prefer PortfolioRiskManager for new code."""
 
     def determine_position_size(self, base_quantity: int, current_price: float) -> int:
-        """Determine how many shares/contracts to trade.
-
-        The default implementation returns ``base_quantity`` unchanged.
-        Override this method to implement sizing logic based on
-        account value, risk tolerance, volatility, etc.
-        """
         return base_quantity
 
     def should_exit_position(
         self, entry_price: float, current_price: float, position: int
     ) -> bool:
-        """Determine whether a position should be closed.
-
-        Default implementation never triggers; override to add stop‑loss
-        and take‑profit logic.
-        """
         return False
 
 
 @dataclass
 class FixedFractionalRiskManager(RiskManager):
-    """Simple risk manager that limits trade size based on a fraction of capital.
-
-    Parameters
-    ----------
-    max_fraction: float
-        Fraction of portfolio value to risk on each trade (e.g., 0.05 for 5 %).
-    account_value: float
-        Current account equity (can be updated externally).
-
-    The position size is computed as ``max_fraction * account_value / current_price``,
-    rounded down to the nearest integer.  This prevents overexposure when prices
-    are high or account value is low.
-    """
+    """Caps trade size at a fixed fraction of account value."""
 
     max_fraction: float = 0.05
     account_value: float = 10000.0
+    stop_loss_pct: float = 0.10
+    take_profit_pct: float = 0.20
 
     def determine_position_size(self, base_quantity: int, current_price: float) -> int:
-        # Determine maximum affordable quantity given risk fraction
+        if current_price <= 0:
+            return 0
         max_qty = int((self.max_fraction * self.account_value) / current_price)
-        # Use the smaller of base_quantity and max_qty
-        qty = min(base_quantity, max_qty)
-        return max(qty, 0)
+        return max(min(base_quantity, max_qty), 0)
 
     def should_exit_position(
         self, entry_price: float, current_price: float, position: int
     ) -> bool:
-        # Example stop‑loss at 10 % loss and take‑profit at 20 % gain
-        if position > 0:
-            if current_price <= entry_price * 0.9:
+        if position > 0 and entry_price > 0:
+            if current_price <= entry_price * (1.0 - self.stop_loss_pct):
                 return True
-            if current_price >= entry_price * 1.2:
+            if current_price >= entry_price * (1.0 + self.take_profit_pct):
                 return True
         return False
+
+
+@dataclass
+class PortfolioRiskManager:
+    """Portfolio level constraints applied after the strategy proposes weights.
+
+    Parameters
+    ----------
+    max_gross_exposure:
+        Ceiling on the sum of absolute weights.
+    max_weight:
+        Ceiling on any single symbol's weight.
+    max_drawdown_stop:
+        Fraction of peak equity that, once lost, halts new entries. The peak is
+        tracked across calls to ``update_equity``.
+    """
+
+    max_gross_exposure: float = 1.0
+    max_weight: float = 0.5
+    max_drawdown_stop: float = 0.20
+    peak_equity: float = 0.0
+    halted: bool = False
+    _history: list = field(default_factory=list, repr=False)
+
+    def update_equity(self, equity: float) -> bool:
+        """Record equity and return True if trading should be halted."""
+        self._history.append(equity)
+        self.peak_equity = max(self.peak_equity, equity)
+        if self.peak_equity <= 0:
+            return self.halted
+        drawdown = 1.0 - equity / self.peak_equity
+        if drawdown >= self.max_drawdown_stop:
+            self.halted = True
+        return self.halted
+
+    @property
+    def drawdown(self) -> float:
+        if not self._history or self.peak_equity <= 0:
+            return 0.0
+        return 1.0 - self._history[-1] / self.peak_equity
+
+    def apply(self, weights: Dict[str, float]) -> Dict[str, float]:
+        """Clamp per symbol weights, then scale down to the gross ceiling."""
+        if self.halted:
+            return {symbol: 0.0 for symbol in weights}
+
+        clamped = {
+            symbol: max(min(weight, self.max_weight), -self.max_weight)
+            for symbol, weight in weights.items()
+        }
+        gross = sum(abs(w) for w in clamped.values())
+        if gross > self.max_gross_exposure and gross > 0:
+            scale = self.max_gross_exposure / gross
+            clamped = {symbol: w * scale for symbol, w in clamped.items()}
+        return clamped
+
+    def reset(self, equity: Optional[float] = None) -> None:
+        self.halted = False
+        self._history = []
+        self.peak_equity = equity or 0.0

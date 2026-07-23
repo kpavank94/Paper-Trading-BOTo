@@ -15,12 +15,16 @@ BOTo incorporates these lessons by providing a clean codebase with modular compo
 
 ## Features
 
-* **IBKR connection via `ib_insync`:**  A simple wrapper manages authentication and maintains a persistent connection to the Trader Workstation (TWS) or IB Gateway.  The implementation follows best practices such as enabling socket clients and using separate ports for paper (default `7497`) and live (default `7496`) trading.
-* **Strategy framework:**  Implement your own strategies by subclassing the `BaseStrategy` class.  An example moving average crossover strategy is provided.  Strategies receive market data and submit orders via a safe execution layer.
-* **Risk management:**  Position sizing, maximum portfolio exposure and stop‑loss/take‑profit orders are configurable.  The risk engine draws inspiration from the `quantum‑trader` risk management module【362023408974584†L165-L196】.
-* **Cost basis analysis:**  BOTo tracks the average cost of open positions and computes realized and unrealized PnL.  This helps evaluate performance and make tax‑aware decisions.
-* **Logging & optional database support:**  Transactions, orders and account balances are logged to standard output and optionally to a local SQLite database.  Following the pattern from `trading‑bot‑framework`【735478255617264†L82-L89】, the system auto‑detects database availability; if a database connection fails, logging continues to the console.
-* **Reports:**  After each trading session the bot generates a CSV report summarizing trades, positions, cost basis and PnL.  A basic HTML report template is included to allow for email delivery or integration with custom dashboards.
+* **Two brokers behind one interface:**  Alpaca (default) and IBKR both implement the same `Broker` protocol, so strategy code never imports a vendor SDK. Switch with `BROKER=alpaca` or `BROKER=ibkr`; `ib_insync` is only imported when IBKR is selected.
+* **Bar driven strategy framework:**  Subclass `BaseStrategy` and implement `evaluate()`, which returns a *target weight* per bar instead of firing orders directly. The same code path drives the backtester and the live runner, so a backtest tests what actually trades.
+* **Backtesting with a realistic fill model:**  Signals formed at a bar's close are filled at the next bar's open, and the overnight gap is attributed to the weight held before that fill. Costs are charged on turnover. Metrics reported: CAGR, annualised volatility, Sharpe, maximum drawdown, Calmar, average gross exposure, annualised turnover and hit rate.
+* **Volatility scaled sizing:**  Positions are sized so that an adverse move of N average true ranges costs a fixed fraction of equity, so a quiet symbol receives a larger allocation than a volatile one for the same risk budget.
+* **Portfolio risk guards:**  A gross exposure ceiling, a per symbol weight ceiling, and a drawdown kill switch that flattens the book and blocks new entries.
+* **Order reconciliation:**  The live runner diffs target weights against the actual book, skips symbols that already have a working order, ignores sub minimum dust, and closes holdings that are no longer targeted.
+* **Cost basis analysis:**  BOTo tracks the average cost of open positions and computes realized and unrealized PnL.
+* **Logging & optional database support:**  Transactions, orders and account balances are logged to standard output and optionally to a local SQLite database. If the database connection fails, logging continues to the console.
+* **Reports:**  After each trading session the bot generates CSV and HTML reports summarising trades, positions, cost basis and PnL.
+* **Tests:**  A pytest suite covers signal correctness (including an explicit no lookahead check), the backtest accounting identities, and the order planning rules. It runs offline against synthetic bars.
 
 ## Installation
 
@@ -56,26 +60,60 @@ The most important variables are:
 * `ACCOUNT`: your IBKR paper account number (optional)
 * `DB_PATH`: path to an SQLite database file for logging (optional)
 
-### 4 – Running the bot
+### 4 - Running the bot
 
-An example script (`bot.py`) is provided to run a moving average crossover strategy on a specified symbol in paper mode:
+Everything runs through one entry point. Credentials come from `.env`, so no secret is ever passed as a command line argument.
+
+Evaluate the strategy on history before risking anything:
 
 ```sh
-python bot.py --symbol AAPL --strategy sma_crossover --short_window 10 --long_window 30 --quantity 10
+python -m paper_trading_boto.bot backtest --symbols SPY,QQQ,IWM --out equity.csv
 ```
 
-At the end of the session the script outputs a CSV report in the `reports/` directory.
+Dry run a single rebalance. Intended orders are logged and nothing is sent:
+
+```sh
+python -m paper_trading_boto.bot once
+```
+
+Send orders to the configured paper account, once or continuously:
+
+```sh
+python -m paper_trading_boto.bot once --live
+python -m paper_trading_boto.bot loop --live
+```
+
+Close every open position:
+
+```sh
+python -m paper_trading_boto.bot flatten
+```
+
+`loop` wakes shortly before each close, rebalances against a nearly complete bar, then sleeps until the next session. Strategy parameters can be overridden per run with `--fast`, `--slow`, `--atr-stop-mult` and `--risk-per-trade`. At the end of a session the bot writes CSV and HTML reports to the `reports/` directory.
+
+Run the tests with:
+
+```sh
+python -m pytest paper_trading_boto/tests -q
+```
 
 ## Project structure
 
 ```
 paper_trading_boto/
-├── bot.py                # Main entry point for running strategies
-├── ibkr_interface.py     # Connection wrapper and API helper functions
-├── strategy.py           # BaseStrategy and sample strategy implementations
-├── risk_management.py    # Position sizing and stop‑loss/target logic
+├── bot.py                # CLI: backtest, once, loop, flatten
+├── config.py             # Typed settings loaded from .env
+├── data.py               # Daily OHLCV bars from the Alpaca market data API
+├── strategy.py           # BaseStrategy, SMACrossoverStrategy, portfolio_targets
+├── backtest.py           # Backtest engine and performance metrics
+├── runner.py             # Live rebalance loop and session reporting
+├── risk_management.py    # Portfolio guards and legacy per trade sizing
+├── brokers/              # Broker protocol plus Alpaca and IBKR adapters
+├── ibkr_interface.py     # ib_insync connection wrapper and API helpers
 ├── cost_basis.py         # Classes for tracking cost basis and PnL
 ├── reporting.py          # Report generation (CSV and HTML)
+├── tradingview_service.py # Optional FastAPI webhook receiver
+├── tests/                # Offline pytest suite
 ├── utils/logging_config.py # Logging configuration
 ├── .env.example          # Example environment configuration file
 ├── requirements.txt      # Python dependencies

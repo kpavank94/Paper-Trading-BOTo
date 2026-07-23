@@ -1,158 +1,128 @@
-"""
-Strategy definitions and base classes for Paper Trading BOTo.
+"""Strategy definitions for Paper Trading BOTo.
 
-This module defines abstract classes for trading strategies and
-implements a sample moving average crossover strategy.  Each strategy
-interacts with the IBKR API via the ``IBKRInterface`` and may use
-optional risk management and cost basis components.  Strategies are
-responsible for deciding when to buy or sell and for managing their
-internal state (e.g., whether a position is open).
+Strategies now consume a DataFrame of OHLCV bars and emit a *target weight*
+per bar: the fraction of account equity the book should hold in that symbol.
+This replaces the previous design where the strategy called the broker
+directly from inside on_tick.
 
-Key design principles drawn from other projects include:
+Two properties follow from the change:
 
-* **Separation of concerns:**  Strategy logic should be separate from
-  connectivity.  The ``trading‑bot‑framework`` emphasises modular
-  strategy development and a clean architecture【305661766794282†L175-L197】.
-* **Extensibility:**  Users should be able to implement custom
-  strategies by subclassing ``BaseStrategy``.  Only a few methods
-  need to be overridden.
-* **Risk awareness:**  Strategies must incorporate risk management;
-  thus each tick delegates to a ``RiskManager`` to determine
-  position size and stop levels【362023408974584†L165-L196】.
+* the identical code path drives the backtester and the live runner, so a
+  backtest actually tests what will be traded;
+* every column is computable from information available at or before the
+  bar's close. The one bar execution lag is applied by the backtester and the
+  runner, never inside the signal, which is what keeps the results honest.
+
+Subclass BaseStrategy and implement evaluate() to add your own logic.
 """
 
 from __future__ import annotations
 
-import datetime
-import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Dict
 
 import numpy as np
+import pandas as pd
 
-from .ibkr_interface import IBKRInterface
-from .risk_management import RiskManager
-from .cost_basis import CostBasisTracker, TradeRecord
+
+def wilder_atr(df: pd.DataFrame, window: int) -> pd.Series:
+    """Average true range using Wilder's smoothing."""
+    prev_close = df["close"].shift(1)
+    true_range = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return true_range.ewm(alpha=1.0 / window, adjust=False, min_periods=window).mean()
 
 
 class BaseStrategy(ABC):
-    """Abstract base class for trading strategies."""
+    """Abstract base class for bar driven strategies."""
 
-    def __init__(
-        self,
-        ibkr: IBKRInterface,
-        symbol: str,
-        quantity: int,
-        risk_manager: RiskManager,
-        cost_tracker: CostBasisTracker,
-    ) -> None:
-        self.ibkr = ibkr
-        self.symbol = symbol
-        self.quantity = quantity
-        self.risk_manager = risk_manager
-        self.cost_tracker = cost_tracker
-        self.logger = self.ibkr.logger.getChild(self.__class__.__name__)
-        self.position = 0  # positive for long, negative for short
-        self.entry_price: Optional[float] = None
-        self.last_tick_time: Optional[datetime.datetime] = None
+    @property
+    @abstractmethod
+    def warmup(self) -> int:
+        """Bars required before any signal may be emitted."""
 
     @abstractmethod
-    def on_start(self) -> None:
-        """Called once before the trading loop begins."""
+    def evaluate(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Return indicators plus a ``target_weight`` column indexed like ``df``."""
 
-    @abstractmethod
-    def on_tick(self, price: float, timestamp: datetime.datetime) -> None:
-        """Called at each iteration with the latest market price."""
-
-    def on_finish(self) -> None:
-        """Called once after the trading loop finishes."""
-        self.logger.info("Strategy finished trading session")
+    def targets(self, df: pd.DataFrame) -> pd.Series:
+        return self.evaluate(df)["target_weight"]
 
 
-@dataclass
+@dataclass(frozen=True)
 class SMACrossoverStrategy(BaseStrategy):
-    """Simple moving average (SMA) crossover strategy.
+    """Long only trend following with volatility scaled position size.
 
-    This example strategy maintains two moving averages (short and
-    long) and enters a long position when the short MA crosses above
-    the long MA.  It exits (sells) when the short MA crosses below
-    the long MA.  Only one position is held at a time.  Position
-    size is determined by the provided ``RiskManager``.
+    Enters when the fast moving average is above the slow one. Rather than
+    trading a fixed share count, the position is sized so that an adverse move
+    of ``atr_stop_mult`` average true ranges costs ``risk_per_trade`` of
+    equity. A quiet symbol therefore gets a larger allocation than a volatile
+    one for the same risk budget.
     """
 
-    ibkr: IBKRInterface
-    symbol: str
-    quantity: int
-    risk_manager: RiskManager
-    cost_tracker: CostBasisTracker
-    short_window: int = 10
-    long_window: int = 30
-    prices: List[float] = field(default_factory=list)
+    fast: int = 20
+    slow: int = 100
+    atr_window: int = 14
+    atr_stop_mult: float = 3.0
+    risk_per_trade: float = 0.01
+    max_weight: float = 0.5
 
     def __post_init__(self) -> None:
-        super().__init__(self.ibkr, self.symbol, self.quantity, self.risk_manager, self.cost_tracker)
-        if self.short_window >= self.long_window:
-            raise ValueError("short_window must be less than long_window")
-        self.logger.info(
-            f"Initialised SMA crossover strategy for {self.symbol} with short={self.short_window}, long={self.long_window}"
+        if self.fast >= self.slow:
+            raise ValueError("fast window must be shorter than slow window")
+        if not 0 < self.risk_per_trade <= 1:
+            raise ValueError("risk_per_trade must be within (0, 1]")
+
+    @property
+    def warmup(self) -> int:
+        return max(self.slow, self.atr_window) + 1
+
+    def evaluate(self, df: pd.DataFrame) -> pd.DataFrame:
+        out = pd.DataFrame(index=df.index)
+        out["close"] = df["close"]
+        out["sma_fast"] = df["close"].rolling(self.fast).mean()
+        out["sma_slow"] = df["close"].rolling(self.slow).mean()
+        out["atr"] = wilder_atr(df, self.atr_window)
+
+        in_trend = (out["sma_fast"] > out["sma_slow"]).astype(float)
+        stop_fraction = (self.atr_stop_mult * out["atr"]) / out["close"]
+        weight = (self.risk_per_trade / stop_fraction.replace(0.0, np.nan)).clip(
+            upper=self.max_weight
         )
 
-    def on_start(self) -> None:
-        self.logger.info(f"Starting SMA crossover strategy for {self.symbol}")
+        out["target_weight"] = (in_trend * weight).fillna(0.0)
+        out.iloc[: self.warmup, out.columns.get_loc("target_weight")] = 0.0
+        out["stop_price"] = out["close"] - self.atr_stop_mult * out["atr"]
+        return out
 
-    def on_tick(self, price: float, timestamp: datetime.datetime) -> None:
-        self.last_tick_time = timestamp
-        # Append latest price
-        self.prices.append(price)
-        # Keep only required window of prices
-        max_len = self.long_window + 1
-        if len(self.prices) > max_len:
-            self.prices = self.prices[-max_len:]
 
-        # We need at least 'long_window' observations
-        if len(self.prices) < self.long_window:
-            return
+def portfolio_targets(
+    strategy: BaseStrategy,
+    bars: Dict[str, pd.DataFrame],
+    max_gross_exposure: float = 1.0,
+) -> pd.DataFrame:
+    """Combine per symbol weights and cap total gross exposure.
 
-        short_ma = np.mean(self.prices[-self.short_window :])
-        long_ma = np.mean(self.prices[-self.long_window :])
-        self.logger.debug(
-            f"Price={price:.2f}, short_ma={short_ma:.2f}, long_ma={long_ma:.2f}, position={self.position}"
-        )
+    When several symbols signal at once the raw weights are scaled down
+    proportionally instead of being truncated, which keeps their relative
+    sizing intact.
+    """
+    weights = {
+        symbol: strategy.targets(df)
+        for symbol, df in bars.items()
+        if not df.empty and len(df) > strategy.warmup
+    }
+    if not weights:
+        return pd.DataFrame()
 
-        # Generate signals
-        if self.position <= 0 and short_ma > long_ma:
-            # Signal to go long
-            qty = self.risk_manager.determine_position_size(self.quantity, price)
-            order_id = self.ibkr.place_market_order(self.symbol, qty, "BUY")
-            if order_id:
-                self.position += qty
-                self.entry_price = price
-                self.cost_tracker.record_trade(
-                    TradeRecord(
-                        symbol=self.symbol,
-                        action="BUY",
-                        quantity=qty,
-                        price=price,
-                        timestamp=timestamp,
-                    )
-                )
-                self.logger.info(f"Entered long position: {qty} shares at {price:.2f}")
-
-        elif self.position > 0 and short_ma < long_ma:
-            # Exit long position
-            qty = abs(self.position)
-            order_id = self.ibkr.place_market_order(self.symbol, qty, "SELL")
-            if order_id:
-                self.position = 0
-                self.entry_price = None
-                self.cost_tracker.record_trade(
-                    TradeRecord(
-                        symbol=self.symbol,
-                        action="SELL",
-                        quantity=qty,
-                        price=price,
-                        timestamp=timestamp,
-                    )
-                )
-                self.logger.info(f"Exited long position: {qty} shares at {price:.2f}")
+    panel = pd.DataFrame(weights).sort_index().fillna(0.0)
+    gross = panel.abs().sum(axis=1)
+    scale = (max_gross_exposure / gross).clip(upper=1.0).replace([np.inf, -np.inf], 1.0)
+    return panel.mul(scale.fillna(1.0), axis=0)

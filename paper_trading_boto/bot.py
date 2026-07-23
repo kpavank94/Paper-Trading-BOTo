@@ -1,155 +1,148 @@
 #!/usr/bin/env python3
-"""
-Main entry point for running strategies with Paper Trading BOTo.
-
-This script parses command‑line arguments, loads configuration from
-``.env``, connects to the IBKR API, instantiates the requested
-strategy and risk manager, and runs a simple tick loop.  At the end
-of the session it generates a CSV and HTML report summarising trades
-and positions.  Users can modify the loop interval, duration and
-strategy parameters via command‑line flags.
+"""Command line entry point for Paper Trading BOTo.
 
 Examples
 --------
+Backtest the default 20/100 crossover on the configured symbols::
 
-Run a 10/30 SMA crossover strategy on AAPL with 10 shares per trade:
+    python -m paper_trading_boto.bot backtest --symbols SPY,QQQ --out equity.csv
 
-```
-python bot.py --symbol AAPL --strategy sma_crossover --short_window 10 --long_window 30 --quantity 10
-```
+Dry run a single rebalance (logs intended orders, sends nothing)::
 
-See the README for details on configuration and available options.
+    python -m paper_trading_boto.bot once
+
+Send real paper orders and then run continuously::
+
+    python -m paper_trading_boto.bot once --live
+    python -m paper_trading_boto.bot loop --live
+
+Credentials and defaults come from .env, so no secret is ever passed as an
+argument. See .env.example.
 """
 
 from __future__ import annotations
 
 import argparse
-import datetime
-import os
-import signal
+import dataclasses
+import json
+import logging
 import sys
-import time
 from typing import Optional
 
-from dotenv import load_dotenv
-
-from .ibkr_interface import IBKRInterface, IBKRConnectionParams
-from .strategy import SMACrossoverStrategy, BaseStrategy
-from .risk_management import RiskManager, FixedFractionalRiskManager
-from .cost_basis import CostBasisTracker
-from .reporting import ReportGenerator
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a trading strategy in paper mode")
-    parser.add_argument("--symbol", required=True, help="Ticker symbol to trade, e.g., AAPL")
-    parser.add_argument("--strategy", default="sma_crossover", help="Name of strategy to run")
-    parser.add_argument("--quantity", type=int, default=10, help="Base position size for each trade")
-    parser.add_argument("--short_window", type=int, default=10, help="Short moving average window")
-    parser.add_argument("--long_window", type=int, default=30, help="Long moving average window")
-    parser.add_argument(
-        "--interval", type=float, default=5.0, help="Interval (in seconds) between price polls"
-    )
-    parser.add_argument(
-        "--duration", type=int, default=30, help="Duration of the session in minutes (0 for indefinite)"
-    )
-    parser.add_argument(
-        "--risk_fraction",
-        type=float,
-        default=0.05,
-        help="Maximum fraction of capital to risk on each trade (0 < fraction <= 1)",
-    )
-    return parser.parse_args()
+from .backtest import run_backtest
+from .config import Settings
+from .data import MarketData
+from .runner import Runner, build_strategy
+from .strategy import portfolio_targets
+from .utils.logging_config import configure_logging
 
 
-def load_config() -> IBKRConnectionParams:
-    """Load configuration from .env and environment variables."""
-    load_dotenv()
-    host = os.getenv("TWS_HOST", "127.0.0.1")
-    port = int(os.getenv("TWS_PORT", 7497))
-    client_id = int(os.getenv("CLIENT_ID", 1))
-    account = os.getenv("ACCOUNT")
-    return IBKRConnectionParams(host=host, port=port, client_id=client_id, account=account)
-
-
-def main() -> None:
-    args = parse_args()
-    params = load_config()
-
-    # Risk manager uses account value; since we cannot query account equity easily via API here,
-    # allow override through environment variable or default to 10,000.
-    initial_equity = float(os.getenv("ACCOUNT_EQUITY", 10000.0))
-    risk_manager = FixedFractionalRiskManager(max_fraction=args.risk_fraction, account_value=initial_equity)
-    cost_tracker = CostBasisTracker()
-
-    ibkr = IBKRInterface(params=params, db_path=os.getenv("DB_PATH"))
-    ibkr.connect()
-
-    # Instantiate chosen strategy
-    strategy: BaseStrategy
-    if args.strategy.lower() == "sma_crossover":
-        strategy = SMACrossoverStrategy(
-            ibkr=ibkr,
-            symbol=args.symbol,
-            quantity=args.quantity,
-            risk_manager=risk_manager,
-            cost_tracker=cost_tracker,
-            short_window=args.short_window,
-            long_window=args.long_window,
+def load_settings(args: argparse.Namespace) -> Settings:
+    settings = Settings.from_env()
+    overrides = {}
+    if args.symbols:
+        overrides["symbols"] = tuple(
+            s.strip().upper() for s in args.symbols.split(",") if s.strip()
         )
-    else:
-        raise ValueError(f"Unknown strategy: {args.strategy}")
+    if args.broker:
+        overrides["broker"] = args.broker
+    strategy_overrides = {
+        key: getattr(args, key)
+        for key in ("fast", "slow", "atr_stop_mult", "risk_per_trade")
+        if getattr(args, key, None) is not None
+    }
+    if strategy_overrides:
+        overrides["strategy"] = dataclasses.replace(settings.strategy, **strategy_overrides)
+    return dataclasses.replace(settings, **overrides) if overrides else settings
 
-    # Setup termination signal
-    stop = False
-    def signal_handler(sig, frame):
-        nonlocal stop
-        stop = True
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
 
-    strategy.on_start()
-    start_time = datetime.datetime.utcnow()
-    end_time = start_time + datetime.timedelta(minutes=args.duration) if args.duration > 0 else None
+def cmd_backtest(args: argparse.Namespace) -> int:
+    settings = load_settings(args)
+    strategy = build_strategy(settings)
+    bars = MarketData(settings).daily_bars()
+    targets = portfolio_targets(strategy, bars, settings.strategy.max_gross_exposure)
+    result = run_backtest(
+        bars,
+        targets,
+        starting_equity=settings.starting_equity,
+        slippage_bps=settings.slippage_bps,
+        commission_bps=settings.commission_bps,
+    )
+    print(json.dumps(result.metrics.as_dict(), indent=2, default=float))
+    if args.out:
+        result.equity.rename("equity").to_csv(args.out)
+    return 0
 
+
+def cmd_once(args: argparse.Namespace) -> int:
+    runner = Runner(load_settings(args))
+    runner.broker.connect()
     try:
-        while not stop:
-            now = datetime.datetime.utcnow()
-            if end_time and now >= end_time:
-                break
-            price = ibkr.get_current_price(args.symbol)
-            if price is not None:
-                strategy.on_tick(price, now)
-            # Check risk manager for exit conditions
-            if strategy.position != 0 and risk_manager.should_exit_position(
-                entry_price=strategy.entry_price or price, current_price=price or 0.0, position=strategy.position
-            ):
-                # Close position
-                action = "SELL" if strategy.position > 0 else "BUY"
-                qty = abs(strategy.position)
-                ibkr.place_market_order(args.symbol, qty, action)
-                cost_tracker.record_trade(
-                    TradeRecord(
-                        symbol=args.symbol,
-                        action=action,
-                        quantity=qty,
-                        price=price if price is not None else 0.0,
-                        timestamp=now,
-                    )
-                )
-                strategy.position = 0
-                strategy.entry_price = None
-                ibkr.logger.info(f"Risk manager closed position at {price:.2f}")
-            time.sleep(args.interval)
+        runner.rebalance(dry_run=not args.live)
     finally:
-        strategy.on_finish()
-        ibkr.disconnect()
-        # Generate reports
-        report_gen = ReportGenerator()
-        csv_path = report_gen.generate_csv(cost_tracker.trade_history, cost_tracker)
-        html_path = report_gen.generate_html(cost_tracker.trade_history, cost_tracker)
-        ibkr.logger.info(f"Trading session complete. Reports saved to {csv_path} and {html_path}.")
+        runner.report()
+        runner.broker.disconnect()
+    return 0
+
+
+def cmd_loop(args: argparse.Namespace) -> int:
+    Runner(load_settings(args)).loop(
+        minutes_before_close=args.minutes_before_close, dry_run=not args.live
+    )
+    return 0
+
+
+def cmd_flatten(args: argparse.Namespace) -> int:
+    runner = Runner(load_settings(args))
+    runner.broker.connect()
+    try:
+        runner.broker.flatten()
+    finally:
+        runner.broker.disconnect()
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="paper_trading_boto", description="Run or evaluate a trading strategy"
+    )
+    parser.add_argument("--broker", choices=["alpaca", "ibkr"], default=None)
+    parser.add_argument("--symbols", default=None, help="comma separated tickers")
+    parser.add_argument("--fast", type=int, default=None, help="fast SMA window")
+    parser.add_argument("--slow", type=int, default=None, help="slow SMA window")
+    parser.add_argument("--atr-stop-mult", dest="atr_stop_mult", type=float, default=None)
+    parser.add_argument("--risk-per-trade", dest="risk_per_trade", type=float, default=None)
+    parser.add_argument("--verbose", action="store_true")
+
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    backtest = sub.add_parser("backtest", help="evaluate the strategy on history")
+    backtest.add_argument("--out", default=None, help="write the equity curve to this CSV")
+    backtest.set_defaults(func=cmd_backtest)
+
+    once = sub.add_parser("once", help="single rebalance")
+    once.add_argument("--live", action="store_true", help="send orders instead of a dry run")
+    once.set_defaults(func=cmd_once)
+
+    loop = sub.add_parser("loop", help="rebalance once per session")
+    loop.add_argument("--live", action="store_true", help="send orders instead of a dry run")
+    loop.add_argument("--minutes-before-close", type=int, default=15)
+    loop.set_defaults(func=cmd_loop)
+
+    flatten = sub.add_parser("flatten", help="close every open position")
+    flatten.set_defaults(func=cmd_flatten)
+    return parser
+
+
+def main(argv: Optional[list] = None) -> int:
+    args = build_parser().parse_args(argv)
+    configure_logging(
+        name="paper_trading_boto",
+        level=logging.DEBUG if args.verbose else logging.INFO,
+    )
+    logging.getLogger().setLevel(logging.DEBUG if args.verbose else logging.INFO)
+    return args.func(args)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
