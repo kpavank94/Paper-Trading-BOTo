@@ -8,7 +8,9 @@ tabulate>=0.9
 alpaca-py>=0.43.0
 
 # IBKR broker (optional; only needed when BROKER=ibkr)
-ib_insync>=0.9.89
+# Note: 0.9.86 is the last release on PyPI; the previously declared >=0.9.89
+# never existed there and made this file uninstallable.
+ib_insync>=0.9.86
 
 # TradingView webhook microservice (optional)
 fastapi>=0.100
