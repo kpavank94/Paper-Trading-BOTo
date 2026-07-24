@@ -7,7 +7,6 @@ backtester without modification.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Protocol, runtime_checkable
 
@@ -67,15 +66,32 @@ def plan_orders(
     for symbol in sorted(set(target_weights) | set(held)):
         if symbol in blocked:
             continue
+        held_qty = held.get(symbol, 0.0)
+        target_weight = target_weights.get(symbol, 0.0)
         price = prices.get(symbol)
+
         if not price or price <= 0:
+            # Without a price we cannot size a position, but a holding that is no
+            # longer targeted must still be closed. Emit the full liquidation with
+            # an unknown notional rather than silently stranding the position.
+            if target_weight == 0.0 and held_qty != 0:
+                intents.append(
+                    Intent(symbol=symbol, delta_shares=int(-held_qty), notional=0.0)
+                )
             continue
-        desired = math.floor(target_weights.get(symbol, 0.0) * equity / price)
-        delta = int(desired - held.get(symbol, 0.0))
+
+        # int() truncates toward zero for both signs; math.floor() rounds a short
+        # target away from zero and would oversize it.
+        desired = int(target_weight * equity / price)
+        delta = int(desired - held_qty)
         if delta == 0:
             continue
         notional = abs(delta) * price
-        if notional < min_notional:
+        # The minimum-notional filter suppresses tiny rebalancing adjustments, but
+        # it must never block a full exit, or a small leftover holding can never
+        # be closed.
+        closing = desired == 0
+        if notional < min_notional and not closing:
             continue
         intents.append(Intent(symbol=symbol, delta_shares=delta, notional=notional))
     return intents

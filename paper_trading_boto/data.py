@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Sequence
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from alpaca.data.enums import Adjustment, DataFeed
@@ -21,11 +22,30 @@ from .config import Settings
 
 OHLCV = ["open", "high", "low", "close", "volume"]
 
+EASTERN = "America/New_York"
+
 
 def empty_frame() -> pd.DataFrame:
     return pd.DataFrame(
         columns=OHLCV, index=pd.DatetimeIndex([], tz="UTC", name="timestamp")
     )
+
+
+def completed_daily_bars(
+    bars: Dict[str, pd.DataFrame], now: datetime
+) -> Dict[str, pd.DataFrame]:
+    """Drop each frame's final row when it belongs to the current, still-forming
+    session, so a live signal is computed from the same completed bars a backtest
+    would see. A bar dated to today's Eastern session is not yet closed intraday.
+    """
+    session_date = now.astimezone(ZoneInfo(EASTERN)).date()
+    out: Dict[str, pd.DataFrame] = {}
+    for symbol, df in bars.items():
+        if not df.empty and df.index[-1].date() >= session_date:
+            out[symbol] = df.iloc[:-1]
+        else:
+            out[symbol] = df
+    return out
 
 
 class MarketData:

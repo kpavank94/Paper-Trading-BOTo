@@ -16,8 +16,12 @@ existing custom subclasses keep working.
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class RiskManager:
@@ -78,24 +82,61 @@ class PortfolioRiskManager:
     max_drawdown_stop: float = 0.20
     peak_equity: float = 0.0
     halted: bool = False
+    state_path: Optional[str] = None
+    last_equity: float = 0.0
     _history: list = field(default_factory=list, repr=False)
+
+    def __post_init__(self) -> None:
+        # Persisted so the kill switch and its high-water mark survive a process
+        # restart. Without this, peak_equity re-seeds to the current (drawn-down)
+        # equity on every run and a halt silently clears itself.
+        self._load()
+
+    def _load(self) -> None:
+        if not self.state_path:
+            return
+        try:
+            with open(self.state_path) as fh:
+                state = json.load(fh)
+        except (OSError, ValueError):
+            return
+        self.peak_equity = max(self.peak_equity, float(state.get("peak_equity", 0.0)))
+        self.halted = self.halted or bool(state.get("halted", False))
+        self.last_equity = float(state.get("last_equity", self.last_equity))
+
+    def _save(self) -> None:
+        if not self.state_path:
+            return
+        try:
+            with open(self.state_path, "w") as fh:
+                json.dump(
+                    {
+                        "peak_equity": self.peak_equity,
+                        "halted": self.halted,
+                        "last_equity": self.last_equity,
+                    },
+                    fh,
+                )
+        except OSError as exc:
+            logger.warning("could not persist risk state to %s: %s", self.state_path, exc)
 
     def update_equity(self, equity: float) -> bool:
         """Record equity and return True if trading should be halted."""
         self._history.append(equity)
+        self.last_equity = equity
         self.peak_equity = max(self.peak_equity, equity)
-        if self.peak_equity <= 0:
-            return self.halted
-        drawdown = 1.0 - equity / self.peak_equity
-        if drawdown >= self.max_drawdown_stop:
-            self.halted = True
+        if self.peak_equity > 0:
+            drawdown = 1.0 - equity / self.peak_equity
+            if drawdown >= self.max_drawdown_stop:
+                self.halted = True
+        self._save()
         return self.halted
 
     @property
     def drawdown(self) -> float:
-        if not self._history or self.peak_equity <= 0:
+        if self.peak_equity <= 0:
             return 0.0
-        return 1.0 - self._history[-1] / self.peak_equity
+        return 1.0 - self.last_equity / self.peak_equity
 
     def apply(self, weights: Dict[str, float]) -> Dict[str, float]:
         """Clamp per symbol weights, then scale down to the gross ceiling."""
@@ -116,3 +157,5 @@ class PortfolioRiskManager:
         self.halted = False
         self._history = []
         self.peak_equity = equity or 0.0
+        self.last_equity = equity or 0.0
+        self._save()

@@ -51,7 +51,9 @@ class AlpacaBroker:
         return {p.symbol: float(p.qty) for p in self.client.get_all_positions()}
 
     def working_symbols(self) -> List[str]:
-        request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+        # Raise the page size well above the ~50 default so a large working-order
+        # book cannot silently truncate and defeat the duplicate-order guard.
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500)
         return [order.symbol for order in self.client.get_orders(filter=request)]
 
     def submit_market_order(

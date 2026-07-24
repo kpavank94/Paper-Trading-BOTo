@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import os
 import time
 from typing import Dict, List, Optional, Tuple
 
 from .brokers import Broker, Intent, build_broker, plan_orders
 from .config import Settings
 from .cost_basis import CostBasisTracker, TradeRecord
-from .data import MarketData
+from .data import MarketData, completed_daily_bars
 from .reporting import ReportGenerator
 from .risk_management import PortfolioRiskManager
 from .strategy import BaseStrategy, SMACrossoverStrategy
@@ -48,18 +49,30 @@ class Runner:
         self.broker = broker or build_broker(settings)
         self.data = MarketData(settings)
         self.cost_tracker = CostBasisTracker()
+        os.makedirs(settings.report_dir, exist_ok=True)
         self.risk = PortfolioRiskManager(
             max_gross_exposure=settings.strategy.max_gross_exposure,
             max_weight=settings.strategy.max_weight,
             max_drawdown_stop=settings.max_drawdown_stop,
+            state_path=os.path.join(settings.report_dir, "risk_state.json"),
         )
 
-    def latest_targets(self) -> Tuple[Dict[str, float], Dict[str, float]]:
-        """Weights and reference prices from the most recent completed bar."""
+    def latest_targets(
+        self, allow_forming_bar: bool = False
+    ) -> Tuple[Dict[str, float], Dict[str, float]]:
+        """Weights and reference prices from the most recent bar.
+
+        By default the current session's still-forming bar is dropped so the live
+        signal matches what a backtest would compute. ``loop`` opts in to the
+        forming bar because it deliberately rebalances against the nearly-complete
+        bar just before the close.
+        """
         from .strategy import portfolio_targets
 
         lookback = max(self.strategy.warmup * 3, 400)
         bars = self.data.daily_bars(lookback_days=lookback)
+        if not allow_forming_bar:
+            bars = completed_daily_bars(bars, dt.datetime.now(dt.timezone.utc))
         panel = portfolio_targets(
             self.strategy, bars, self.settings.strategy.max_gross_exposure
         )
@@ -67,12 +80,17 @@ class Runner:
             return {}, {}
         return panel.iloc[-1].to_dict(), self.data.last_prices(bars)
 
-    def rebalance(self, dry_run: bool = True) -> List[Intent]:
+    def rebalance(self, dry_run: bool = True, allow_forming_bar: bool = False) -> List[Intent]:
         if not self.broker.market_is_open():
             log.info("market is closed, no action taken")
             return []
 
-        equity = self.broker.equity()
+        try:
+            equity = self.broker.equity()
+        except Exception as exc:  # never size against an unknown/fabricated equity
+            log.error("could not determine account equity (%s); skipping rebalance", exc)
+            return []
+
         if self.risk.update_equity(equity):
             log.error(
                 "drawdown %.1f%% breached the %.1f%% limit, flattening and halting",
@@ -83,7 +101,7 @@ class Runner:
                 self.broker.flatten()
             return []
 
-        weights, prices = self.latest_targets()
+        weights, prices = self.latest_targets(allow_forming_bar=allow_forming_bar)
         if not weights:
             log.warning("no targets produced, check symbols and warmup length")
             return []
@@ -93,13 +111,26 @@ class Runner:
             "equity=%.2f targets=%s", equity, {k: round(v, 4) for k, v in weights.items()}
         )
 
+        # Read the live book once, and abort if either read fails: acting on an
+        # unknown book risks duplicating orders we already hold.
+        try:
+            held = self.broker.positions()
+            blocked = set(self.broker.working_symbols())
+        except Exception as exc:
+            log.error(
+                "could not read positions/open orders (%s); skipping rebalance "
+                "to avoid duplicate orders",
+                exc,
+            )
+            return []
+
         intents = plan_orders(
             target_weights=weights,
             prices=prices,
             equity=equity,
-            held=self.broker.positions(),
+            held=held,
             min_notional=self.settings.min_order_notional,
-            blocked=set(self.broker.working_symbols()),
+            blocked=blocked,
         )
         if not intents:
             log.info("book already matches targets")
@@ -124,7 +155,10 @@ class Runner:
                         symbol=intent.symbol,
                         action=intent.action,
                         quantity=intent.quantity,
-                        price=prices[intent.symbol],
+                        # A holding closed without a fresh price (dropped from the
+                        # universe) has no reference price; record 0.0 rather than
+                        # raising KeyError mid-order-loop.
+                        price=prices.get(intent.symbol, 0.0),
                         timestamp=dt.datetime.now(dt.timezone.utc),
                     )
                 )
@@ -165,13 +199,14 @@ class Runner:
         clock = getattr(self.broker, "client", None)
         now = dt.datetime.now(dt.timezone.utc)
         if clock is None or not hasattr(clock, "get_clock"):
-            self.rebalance(dry_run=dry_run)
+            # loop trades near the close, so use the nearly-complete forming bar.
+            self.rebalance(dry_run=dry_run, allow_forming_bar=True)
             return 3600.0
 
         state = clock.get_clock()
         trigger = state.next_close - dt.timedelta(minutes=minutes_before_close)
         if state.is_open and now >= trigger:
-            self.rebalance(dry_run=dry_run)
+            self.rebalance(dry_run=dry_run, allow_forming_bar=True)
             return max((state.next_close - now).total_seconds() + 60, 60)
         target = trigger if state.is_open else state.next_open
         return max((target - now).total_seconds(), 30)

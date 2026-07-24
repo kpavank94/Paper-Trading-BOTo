@@ -36,22 +36,39 @@ class Position:
     avg_cost: float = 0.0
 
     def update(self, action: str, qty: int, price: float) -> float:
-        """Update position based on a trade and return realized PnL (if any)."""
-        realized_pnl = 0.0
-        if action == "BUY":
-            total_cost = self.avg_cost * self.quantity + price * qty
-            self.quantity += qty
-            if self.quantity != 0:
-                self.avg_cost = total_cost / self.quantity
-        elif action == "SELL":
-            # Realized PnL = (sell price - avg cost) * qty
-            realized_pnl = (price - self.avg_cost) * qty
-            self.quantity -= qty
-            if self.quantity < 0:
-                # More sold than held, treat as flat; leftover quantity becomes new short
-                self.avg_cost = price
-            if self.quantity == 0:
-                self.avg_cost = 0.0
+        """Apply a trade and return realized PnL.
+
+        Handles long and short positions symmetrically, and the cases where a
+        trade adds to, reduces, fully closes, or crosses through zero. PnL is
+        realized only on the shares that actually close, valued against the
+        average cost of the side being closed.
+        """
+        signed = qty if action.upper() == "BUY" else -qty
+        prev_qty = self.quantity
+
+        # Opening from flat, or adding to the existing side: weighted-average cost.
+        if prev_qty == 0 or (prev_qty > 0) == (signed > 0):
+            new_qty = prev_qty + signed
+            if new_qty != 0:
+                self.avg_cost = (
+                    self.avg_cost * abs(prev_qty) + price * abs(signed)
+                ) / abs(new_qty)
+            self.quantity = new_qty
+            return 0.0
+
+        # Reducing, closing, or flipping: realize PnL only on the closed shares.
+        closing = min(abs(signed), abs(prev_qty))
+        direction = 1.0 if prev_qty > 0 else -1.0  # long: price-cost; short: cost-price
+        realized_pnl = direction * (price - self.avg_cost) * closing
+
+        new_qty = prev_qty + signed
+        if new_qty == 0:
+            self.avg_cost = 0.0
+        elif (new_qty > 0) != (prev_qty > 0):
+            # Crossed through zero: the remainder opens a fresh position.
+            self.avg_cost = price
+        # else: partial close on the same side leaves avg_cost unchanged.
+        self.quantity = new_qty
         return realized_pnl
 
 

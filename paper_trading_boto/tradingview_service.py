@@ -21,6 +21,7 @@ hard‑coded.
 
 from __future__ import annotations
 
+import hmac
 import os
 from fastapi import FastAPI, Request, HTTPException
 from dotenv import load_dotenv
@@ -82,9 +83,15 @@ async def tradingview_webhook(request: Request) -> dict:
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    # Validate secret
+    # Validate secret. Fail closed: an unset secret must never mean "no auth",
+    # or anyone who can reach this port can place live orders.
     secret = data.get("secret")
-    if TRADINGVIEW_SECRET and secret != TRADINGVIEW_SECRET:
+    if not TRADINGVIEW_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail="TRADINGVIEW_SECRET is not configured; refusing to place orders.",
+        )
+    if not isinstance(secret, str) or not hmac.compare_digest(secret, TRADINGVIEW_SECRET):
         raise HTTPException(status_code=401, detail="Invalid secret")
 
     # Determine order parameters with fallbacks to environment variables

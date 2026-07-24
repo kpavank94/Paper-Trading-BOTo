@@ -79,16 +79,24 @@ class IBKRInterface:
             self.ib.disconnect()
 
     def get_account_summary(self) -> Optional[dict]:
-        """Return a dictionary of account summary values for the specified account (if available)."""
-        if not self.params.account:
-            return None
+        """Return a dictionary of account summary tag -> value.
+
+        When no explicit account is configured, the connected account's values
+        are used.  Returns ``None`` only when the summary genuinely could not be
+        read, so callers can refuse to act rather than fall back to a fabricated
+        equity number.
+        """
         try:
             summary_list = self.ib.accountSummary()
-            summary = {item.tag: item.value for item in summary_list if item.account == self.params.account}
-            return summary
         except Exception as exc:
             self.logger.error(f"Failed to fetch account summary: {exc}")
             return None
+        summary = {
+            item.tag: item.value
+            for item in summary_list
+            if not self.params.account or item.account == self.params.account
+        }
+        return summary or None
 
     # Market data
     def get_current_price(self, symbol: str, exchange: str = "SMART", currency: str = "USD") -> Optional[float]:
@@ -215,22 +223,25 @@ class IBKRInterface:
             self.logger.error(f"Failed to cancel order {order_id}: {exc}")
 
     def get_open_positions(self) -> List[dict]:
-        """Return a list of open positions with quantity and cost basis."""
-        positions = []
+        """Return a list of open positions with quantity and cost basis.
+
+        Raises on failure rather than returning an empty list: a caller must
+        never mistake an API error for a flat book, or it will resubmit orders
+        it already holds.
+        """
         try:
             ib_positions = self.ib.positions()
-            for pos in ib_positions:
-                positions.append(
-                    {
-                        "symbol": pos.contract.symbol,
-                        "quantity": pos.position,
-                        "avgCost": pos.avgCost,
-                    }
-                )
-            return positions
         except Exception as exc:
             self.logger.error(f"Failed to fetch positions: {exc}")
-            return positions
+            raise
+        return [
+            {
+                "symbol": pos.contract.symbol,
+                "quantity": pos.position,
+                "avgCost": pos.avgCost,
+            }
+            for pos in ib_positions
+        ]
 
     def get_trade_history(self) -> List[dict]:
         """Retrieve recent trades (fills)."""

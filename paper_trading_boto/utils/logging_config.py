@@ -50,7 +50,9 @@ class DBLogger:
 
     def _ensure_connection(self) -> None:
         try:
-            self.conn = sqlite3.connect(self.db_path)
+            # check_same_thread=False: ib_insync (asyncio) and FastAPI emit log
+            # records from threads other than the one that opened the connection.
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self.cursor = self.conn.cursor()
         except Exception as exc:
             print(f"Failed to connect to database at {self.db_path}: {exc}")
@@ -119,6 +121,11 @@ def configure_logging(
     logger = logging.getLogger(name)
     logger.setLevel(level)
     logger.propagate = False  # Avoid duplicate logs when using root
+
+    # Idempotent: repeated construction (e.g. a new Runner per session) must not
+    # stack duplicate handlers that multiply every log line.
+    if logger.handlers:
+        return logger
 
     # Console handler with simple format
     ch = logging.StreamHandler()
