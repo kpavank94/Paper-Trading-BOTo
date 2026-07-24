@@ -1,0 +1,19 @@
+# Core
+pandas>=2.0
+numpy>=1.24
+python-dotenv>=1.0
+tabulate>=0.9
+
+# Alpaca broker and market data (default)
+alpaca-py>=0.43.0
+
+# IBKR broker (optional; only needed when BROKER=ibkr)
+ib_insync>=0.9.89
+
+# TradingView webhook microservice (optional)
+fastapi>=0.100
+uvicorn[standard]>=0.22
+pydantic>=2.0
+
+# Tests
+pytest>=8.0
