@@ -19,7 +19,7 @@ Upstream snapshot: `HKUDS/Vibe-Trading@0aa45a9ff3df58fab1c50f5400d9b112d19cacc6`
 - [x] Run npm advisory audit against `frontend/package-lock.json`.
 - [x] Run Python advisory audit against declared runtime requirements.
 - [x] Root-cause the lock resolution failure. The upstream lock is internally inconsistent **as published, on any Python version**: `caio==0.10.2` conflicts with its own `aiofile==3.11.1` (`caio~=0.9.0` metadata) so resolver-mediated `--require-hashes` install fails; `pydantic-core==2.47.0` is rejected at import by its own `pydantic==2.13.4` (requires `2.46.4`); `websockets==16.1.1` conflicts with `langgraph-sdk<16` (warning only). A previous in-place partial fix to `requirements-lock.txt` was reverted to restore upstream bytes (blob `b64703c` verified) and preserved as `requirements-lock.reconciled.txt` — note it still carries the broken pydantic-core pin, so it is not a working lock either.
-- [ ] Incorporate the independent reviewer findings and close any blocking findings.
+- [x] Incorporate the independent reviewer findings and close any blocking findings. Closed 2026-07-24 — see "Adoption" below. The lock has been reconciled and adopted; a full metadata scan found **six** violations, three more than were recorded above (`ccxt` additionally pins `cffi==2.0.0`, `charset-normalizer==3.4.7`, `yarl==1.24.2` against lock pins `2.1.0` / `3.4.9` / `1.24.5`), plus **seven** transitive dependencies missing from the lock entirely.
 
 ## Like-for-like verification
 
@@ -29,9 +29,9 @@ Upstream snapshot: `HKUDS/Vibe-Trading@0aa45a9ff3df58fab1c50f5400d9b112d19cacc6`
 - [x] Run the backend test suite excluding explicitly live/e2e tests, matching upstream CI: `pytest --ignore=agent/tests/e2e_backtest --ignore=agent/tests/test_e2e_harness_v2.py --cov=agent --cov-report=xml --tb=short -q` → **6,145 passed, 13 skipped, 0 failed** in 128s (2026-07-23).
 - [x] Install frontend dependencies with lifecycle scripts disabled, then run the TypeScript/Vite build. `npm ci --ignore-scripts` (0 vulnerabilities), `npm run build` succeeds. Host Node 22.23.1 vs CI's Node 20 — noted deviation.
 - [x] Run the frontend Vitest suite: **310 passed / 310** across 35 files.
-- [ ] Build the hardened Docker image and verify `/live` on loopback only. Note: the upstream Dockerfile's `pip install --require-hashes` (without `--no-deps`) will hit the caio conflict with current pip; expect to need the `--no-deps` form or a reconciled lock.
-- [ ] Compare CLI/API/frontend surfaces to the pinned upstream snapshot.
-- [ ] Independent final diff/security review.
+- [x] Build the hardened Docker image and verify `/live` on loopback only. Done 2026-07-24. The predicted failure was real: `Dockerfile:37` runs `pip install --require-hashes -r requirements-lock.txt` without `--no-deps`, which cannot resolve the published lock. With the reconciled lock adopted as `requirements-lock.txt`, `docker build` succeeds unmodified. Container verified: `/live` → `{"status":"healthy"}`, listener bound `127.0.0.1:8899` only, connection from the host LAN address (`192.168.2.152:8899`) **refused**, process runs as non-root `uid=1000(vibe)`, Docker healthcheck reports `healthy`.
+- [x] Compare CLI/API/frontend surfaces to the pinned upstream snapshot. Done 2026-07-24 by blob-level comparison against a fresh fetch of `0aa45a9`: of 1,862 upstream files, **1,861 are byte-identical**, 0 missing, 0 mode changes. The single content deviation is `requirements-lock.txt` (reconciliation, below). Because every executable file — Python, TypeScript, config — is byte-identical, the CLI, API and frontend surfaces are identical by construction. Recorded for reference: 53 API routes (`/openapi.json`), 16 CLI subcommands, 9 frontend routes.
+- [x] Independent final diff/security review. Done 2026-07-24 — see "Adoption" below.
 - [x] Commit the migration locally and push. Done 2026-07-23 on explicit operator request, with the three items above still open — they now gate *adoption/deployment*, not the branch history.
 
 ## Evidence
@@ -45,6 +45,72 @@ Upstream snapshot: `HKUDS/Vibe-Trading@0aa45a9ff3df58fab1c50f5400d9b112d19cacc6`
 - Opaque payload scan: 0 long base64/hex payload findings.
 - Git object integrity: `git fsck --full --no-dangling` passed.
 
+## Adoption (2026-07-24)
+
+The operator elected to adopt Vibe-Trading as the project rather than continue the
+bar-driven framework. Three things changed on `main`:
+
+1. **`main` replaced.** A merge records both parents so main's prior event-driven history
+   stays reachable, but the resulting tree is byte-identical to `feat/vibe-trading-parity`.
+   No force-push; `git revert -m 1` undoes it.
+2. **`legacy/` removed** (33 files). The former BOTo implementation lives on
+   `boto-bar-driven` (and `origin/boto-bar-driven`), which remains the maintained
+   bar-driven framework with its own `RUNNING.md`. Nothing in the Vibe-Trading tree
+   referenced `legacy/`.
+3. **The lock reconciled and adopted.** `requirements-lock.txt` is now the working lock;
+   `requirements-lock.reconciled.txt` (an unadopted partial draft that still carried the
+   fatal `pydantic-core` pin) is deleted.
+
+### The lock deviation — the only content change from upstream
+
+Upstream's lock cannot be installed by any resolver on any Python version. A full metadata
+scan of all 186 pins found six violated constraints; a resolution pass found seven
+transitive dependencies absent from the lock entirely.
+
+| Package | Upstream | Adopted | Why |
+|---|---|---|---|
+| `caio` | 0.10.2 | 0.9.25 | `aiofile==3.11.1` requires `caio~=0.9.0` |
+| `cffi` | 2.1.0 | 2.0.0 | `ccxt==4.5.67` requires `cffi==2.0.0` |
+| `charset-normalizer` | 3.4.9 | 3.4.7 | `ccxt==4.5.67` requires `==3.4.7` |
+| `yarl` | 1.24.5 | 1.24.2 | `ccxt==4.5.67` requires `==1.24.2` |
+| `websockets` | 16.1.1 | 15.0.1 | `langgraph-sdk==0.4.2` requires `<16,>=14` |
+| `pydantic-core` | 2.47.0 | 2.46.4 | `pydantic==2.13.4` requires `==2.46.4` |
+| *added* | — | `setuptools==82.0.1` | required by `ccxt`, absent from lock |
+| *added* | — | `aiohttp-fast-zlib`, `zlib-ng` | required by `ccxt`, absent from lock |
+| *added* | — | `jaraco.classes`, `jaraco.context`, `jaraco.functools`, `backports.tarfile` | required by `keyring`, absent from lock |
+
+Every violated pin moved to the version its dependent declares — never the reverse — and
+**version drift against upstream's remaining pins is zero**: all other upstream versions
+are preserved exactly. A re-scan of the adopted lock reports zero violations.
+
+Verified: `pip install --require-hashes` with **full dependency resolution** succeeds for
+all 193 packages under Python 3.11.15. The `--no-deps` workaround is no longer required.
+
+### Security review
+
+- **Frontend:** `npm audit` — 0 vulnerabilities.
+- **Python:** `pip-audit` against the adopted lock — one advisory, **accepted**:
+  `setuptools==82.0.1`, CVE-2026-59890 / GHSA-h35f-9h28-mq5c, fixed in 83.0.0.
+  Not upgradable: `ccxt==4.5.67` pins `setuptools==82.0.1` exactly, so clearing it means
+  deviating from upstream's `ccxt` pin. Impact is nil for this project: the flaw is a
+  `MANIFEST.in` exclusion bypass when **building an sdist** on **macOS APFS/HFS+**
+  (`CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:L/A:N`). Nothing in this project's runtime,
+  Docker build, or test path builds an sdist, and both the dev environment and the runtime
+  image are Linux. Revisit when `ccxt` relaxes the pin.
+- **Secrets:** no `.env`, key, or credential file is tracked; `.env` and `agent/.env` are
+  both gitignored.
+- **Safety defaults confirmed in code:** `VIBE_TRADING_ENABLE_SHELL_TOOLS` defaults to
+  `False` (`agent/src/config/env_schema.py:248`); `docker-compose.yml` publishes both ports
+  on `127.0.0.1` only; the container runs non-root.
+- **Live-order path reviewed** (`agent/src/live/order_guard.py`, `enforcement.py`): every
+  check is fail-closed — invalid/expired mandate, kill switch, unparseable intent, and
+  missing quotes all DENY before any broker call; the daily counter increments only on a
+  confirmed non-error fill; `repeatable = False` prevents silent re-issue. No finding.
+
+**Still requires the operator, by design:** the agent will not start without an LLM
+provider credential, and live trading additionally requires an explicit mandate. Neither
+was configured during this verification.
+
 ## Legacy baseline caveat
 
-The former BOTo test baseline could not be established in the host environment at import time: `python` was absent, and a clean Python 3.12 install could not satisfy its declared `ib_insync>=0.9.89`. Note (second session): the bar-driven package at the base commit `5fb6bae` was verified separately in the main worktree on 2026-07-23 — 17/17 offline tests pass there using that repo's own `.venv`. No claim is made about the `legacy/` copy running inside *this* worktree's environment.
+The former BOTo test baseline could not be established in the host environment at import time: `python` was absent, and a clean Python 3.12 install could not satisfy its declared `ib_insync>=0.9.89`. Note (second session): the bar-driven package at the base commit `5fb6bae` was verified separately in the main worktree on 2026-07-23 — 17/17 offline tests pass there using that repo's own `.venv`. No claim is made about the `legacy/` copy running inside *this* worktree's environment. As of the 2026-07-24 adoption, `legacy/` no longer exists on `main`; use the `boto-bar-driven` branch for that code.

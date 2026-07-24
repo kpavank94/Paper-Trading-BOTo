@@ -21,12 +21,14 @@ Last updated: 2026-07-23 by Claude Code (second session; import and static revie
 
 ## Remaining verification
 
-See `BOTo_MIGRATION.md`. Do not mark build/test items complete without fresh command output. Do not enable shell tools, live broker order placement, external messaging channels, or network exposure merely to run tests. The migration was committed and pushed on 2026-07-23 at the operator's explicit request. Still open (now gating adoption/deployment rather than the branch history): hardened Docker build + `/live` loopback check, CLI/API/frontend surface comparison against the pinned snapshot, independent final review.
+See `BOTo_MIGRATION.md`. Do not mark build/test items complete without fresh command output. Do not enable shell tools, live broker order placement, external messaging channels, or network exposure merely to run tests.
+
+**All gates closed 2026-07-24.** The platform was adopted onto `main` at the operator's explicit request: `main`'s tree is now byte-identical to the parity branch (merge with both parents, no force-push), `legacy/` was removed, and the dependency lock was reconciled and adopted. Hardened Docker build succeeds and `/live` is loopback-only; 1,861 of 1,862 upstream files remain byte-identical (sole deviation: `requirements-lock.txt`); security review recorded one accepted advisory (`setuptools==82.0.1`, sdist/macOS-only, pinned exactly by `ccxt`). Details and evidence in `BOTo_MIGRATION.md` under "Adoption".
 
 ## Safety defaults
 
 - Keep shell tools disabled (`VIBE_TRADING_ENABLE_SHELL_TOOLS` unset).
 - Keep broker connectors read-only/paper unless the operator explicitly authorizes otherwise.
 - Bind services to loopback.
-- Prefer the hash-locked dependency path (`--no-deps --require-hashes` natively, or the hardened Docker build); treat `requirements-lock.reconciled.txt` as an unadopted draft.
+- Prefer the hash-locked dependency path. `requirements-lock.txt` is now reconciled and installs cleanly with `pip install --require-hashes` under **full** dependency resolution — the `--no-deps` workaround is obsolete, and `requirements-lock.reconciled.txt` has been deleted.
 - Never commit `.env` files or credentials.
