@@ -280,6 +280,10 @@ register_alpha_routes(app)
 from src.api.auth_routes import register_auth_routes  # noqa: E402
 register_auth_routes(app)
 
+# --- TradingView webhook receiver (advisory signal ingestion) ---
+from src.api.webhook_routes import register_webhook_routes  # noqa: E402
+register_webhook_routes(app)
+
 
 # ============================================================================
 # Scheduled Research Routes - defined in src/api/scheduled_routes.py

@@ -169,6 +169,14 @@ class DataConfig(_EnvBase):
     vibe_trading_data_cache: EnvBool = Field(alias="VIBE_TRADING_DATA_CACHE", default=False)
     vibe_trading_data_cache_root: str = Field(alias="VIBE_TRADING_DATA_CACHE_ROOT", default="")
     aliyun_iqs_api_key: str = Field(alias="ALIYUN_IQS_API_KEY", default="")
+    searxng_url: str = Field(alias="SEARXNG_URL", default="")
+    searxng_timeout_s: float = Field(alias="SEARXNG_TIMEOUT_S", default=10.0)
+    # Alpaca market-data API (news + bars). Free with a paper account; the IEX
+    # feed needs no paid subscription. Distinct from the connector's trading
+    # credential (which uses the TAP credential store) — these read public data.
+    apca_api_key_id: str = Field(alias="APCA_API_KEY_ID", default="")
+    apca_api_secret_key: str = Field(alias="APCA_API_SECRET_KEY", default="")
+    apca_data_feed: str = Field(alias="APCA_DATA_FEED", default="iex")
     qveris_api_key: str = Field(alias="QVERIS_API_KEY", default="")
     qveris_base_url: str = Field(alias="QVERIS_BASE_URL", default="")
     rsshub_base_url: str = Field(alias="RSSHUB_BASE_URL", default="")
@@ -260,6 +268,11 @@ class APIConfig(_EnvBase):
         alias="VIBE_TRADING_API_URL", default="http://127.0.0.1:8000",
     )
     futu_trade_pwd_md5: str = Field(alias="FUTU_TRADE_PWD_MD5", default="")
+    # TradingView webhook receiver. The secret gates the /webhook/tradingview
+    # endpoint (fail-closed: unset => the endpoint refuses every request). The
+    # receiver is advisory-only — it records signals; it never places orders.
+    tradingview_webhook_secret: str = Field(alias="TRADINGVIEW_WEBHOOK_SECRET", default="")
+    tradingview_signals_path: str = Field(alias="TRADINGVIEW_SIGNALS_PATH", default="")
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,36 @@ _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_SECONDS = 0.8
 
 
+def _searxng_search(query: str, max_results: int = 5) -> list[dict] | None:
+    """Search via a self-hosted SearXNG instance (private metasearch).
+
+    SearXNG aggregates many engines behind one endpoint and exposes a JSON API at
+    ``{base}/search?q=...&format=json`` (the ``json`` output format must be enabled
+    in the instance's ``settings.yml``). Returns ddgs-shaped dicts
+    (title/href/body) so the caller treats every backend uniformly; returns None
+    when ``SEARXNG_URL`` is unset so the caller falls through to ddgs. Pure stdlib.
+    """
+    base = get_env_config().data.searxng_url.strip().rstrip("/")
+    if not base:
+        return None
+    import urllib.parse
+    import urllib.request
+
+    timeout = get_env_config().data.searxng_timeout_s
+    url = f"{base}/search?" + urllib.parse.urlencode({"q": query, "format": "json"})
+    req = urllib.request.Request(url, headers={"User-Agent": "vibe-trading/searxng"})
+    resp = urllib.request.urlopen(req, timeout=timeout)
+    data = json.loads(resp.read().decode("utf-8", "ignore"))
+    out: list[dict] = []
+    for item in (data.get("results") or [])[:max_results]:
+        out.append({
+            "title": item.get("title", ""),
+            "href": item.get("url", ""),
+            "body": item.get("content", ""),
+        })
+    return out
+
+
 def _aliyun_iqs_search(query: str, max_results: int = 5) -> list[dict] | None:
     """Search via Alibaba Cloud IQS (cloud-iqs.aliyuncs.com) — official API,
     structured (title/link/snippet/hostname), CN-direct (~1s), supports a finance
@@ -183,6 +213,30 @@ class WebSearchTool(BaseTool):
         query = kwargs["query"]
         max_results = min(int(kwargs.get("max_results", 5)), 10)
         backends = (get_env_config().agent_tuning.vibe_trading_search_backends or _DEFAULT_BACKENDS).strip() or "auto"
+
+        # Fast path: self-hosted SearXNG if configured (private metasearch, no
+        # third-party rate limits, results stay on your own infra). Takes priority
+        # over every other backend; falls through to IQS/ddgs on any failure.
+        if get_env_config().data.searxng_url.strip():
+            try:
+                raw = _searxng_search(query, max_results=max_results)
+                if raw:
+                    payload = {
+                        "status": "ok",
+                        "query": query,
+                        "backends": "searxng",
+                        "results": [
+                            {"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")}
+                            for r in raw
+                        ],
+                    }
+                    payload = with_security_warnings(
+                        payload, fields=("results.*.title", "results.*.snippet")
+                    )
+                    return json.dumps(payload, ensure_ascii=False)
+                logger.warning("searxng returned no results, falling through to other backends")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("searxng failed: %s, falling through to other backends", exc)
 
         # Fast path: Alibaba Cloud IQS if configured (official API, CN-direct,
         # ~1s, structured + snippet, best quality). Skip ddgs entirely when IQS

@@ -111,6 +111,35 @@ all 193 packages under Python 3.11.15. The `--no-deps` workaround is no longer r
 provider credential, and live trading additionally requires an explicit mandate. Neither
 was configured during this verification.
 
+## Feature deviations from upstream (2026-07-25)
+
+Beyond the reconciled lock, the following intentional changes extend the platform
+for the operator's setup. Kept minimal and mirroring existing patterns; each is
+covered by tests. These are the only edits to upstream files.
+
+| Capability | Files touched | Nature |
+|---|---|---|
+| **SearXNG search** | `src/tools/web_search_tool.py`, `src/config/env_schema.py` | New top-priority backend in the existing `web_search` tool (falls back to ddgs); `SEARXNG_URL` / `SEARXNG_TIMEOUT_S` config. Mirrors the existing Aliyun-IQS fast-path. |
+| **TradingView webhook** | `src/api/webhook_routes.py` (new), `api_server.py`, `src/config/env_schema.py` | Secret-guarded, fail-closed, **advisory-only** signal receiver (`POST /webhook/tradingview`, `GET /webhook/tradingview/signals`). Never places orders — execution stays behind the mandate/order-guard by design. |
+| **Alpaca news tool** | `src/tools/alpaca_news_tool.py` (new) | Auto-discovered `get_alpaca_news` BaseTool; self-disables without a key. Coarse lexicon sentiment tag (not a calibrated score). |
+| **Alpaca data loader** | `backtest/loaders/alpaca_loader.py` (new), `backtest/loaders/registry.py`, `SKILL.md` | New `alpaca` source for `us_equity` daily bars; added to VALID_SOURCES + fallback chain; source count 23→24. |
+| **Config** | `src/config/env_schema.py` | Added `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` / `APCA_DATA_FEED`, plus the SearXNG and TradingView fields above. All go through the Pydantic schema, so the CI env-gate stays green. |
+
+New tests: `test_webhook_tradingview.py` (6), `test_alpaca_integrations.py` (7);
+`test_registry.py` and `test_distribution_skill_manifest.py` updated for the new
+loader. Full hermetic suite: **6158 passed, 0 failed**. See the testing note in
+`BOTo_TASKS.md` — the suite must run without a populated `agent/.env`.
+
+The immediate motivation was a reported backtest "execution timeout" that was
+**not** an engine failure: the run produced complete, validated artifacts, but
+the 90s browser SSE limit expired first on the slow local model. Fixed by raising
+`VIBE_TRADING_SSE_TIMEOUT` / `TIMEOUT_SECONDS` / `TOOL_TIMEOUT_SECONDS` in
+`agent/.env` (gitignored).
+
+**Not built (by decision):** TradingView backtesting has no official API (Strategy
+Tester is browser-only; scraping violates ToS), so the built-in backtest engine
+is kept and TradingView is integrated via inbound webhooks only.
+
 ## Legacy baseline caveat
 
 The former BOTo test baseline could not be established in the host environment at import time: `python` was absent, and a clean Python 3.12 install could not satisfy its declared `ib_insync>=0.9.89`. Note (second session): the bar-driven package at the base commit `5fb6bae` was verified separately in the main worktree on 2026-07-23 — 17/17 offline tests pass there using that repo's own `.venv`. No claim is made about the `legacy/` copy running inside *this* worktree's environment. As of the 2026-07-24 adoption, `legacy/` no longer exists on `main`; use the `boto-bar-driven` branch for that code.
