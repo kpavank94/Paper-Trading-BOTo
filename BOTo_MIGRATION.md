@@ -121,14 +121,21 @@ covered by tests. These are the only edits to upstream files.
 |---|---|---|
 | **SearXNG search** | `src/tools/web_search_tool.py`, `src/config/env_schema.py` | New top-priority backend in the existing `web_search` tool (falls back to ddgs); `SEARXNG_URL` / `SEARXNG_TIMEOUT_S` config. Mirrors the existing Aliyun-IQS fast-path. |
 | **TradingView webhook** | `src/api/webhook_routes.py` (new), `api_server.py`, `src/config/env_schema.py` | Secret-guarded, fail-closed, **advisory-only** signal receiver (`POST /webhook/tradingview`, `GET /webhook/tradingview/signals`). Never places orders — execution stays behind the mandate/order-guard by design. |
-| **Alpaca news tool** | `src/tools/alpaca_news_tool.py` (new) | Auto-discovered `get_alpaca_news` BaseTool; self-disables without a key. Coarse lexicon sentiment tag (not a calibrated score). |
-| **Alpaca data loader** | `backtest/loaders/alpaca_loader.py` (new), `backtest/loaders/registry.py`, `SKILL.md` | New `alpaca` source for `us_equity` daily bars; added to VALID_SOURCES + fallback chain; source count 23→24. |
-| **Config** | `src/config/env_schema.py` | Added `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` / `APCA_DATA_FEED`, plus the SearXNG and TradingView fields above. All go through the Pydantic schema, so the CI env-gate stays green. |
+| **GDELT news + sentiment tool** | `src/tools/gdelt_news_tool.py` (new) | Auto-discovered `get_gdelt_news` BaseTool: global news + GDELT aggregate "tone" sentiment. **No key, no signup, Canada-accessible.** Rate-limit tolerant. |
+| **Config** | `src/config/env_schema.py` | Added the SearXNG and TradingView fields above (Pydantic schema, so the CI env-gate stays green). |
 
-New tests: `test_webhook_tradingview.py` (6), `test_alpaca_integrations.py` (7);
-`test_registry.py` and `test_distribution_skill_manifest.py` updated for the new
-loader. Full hermetic suite: **6158 passed, 0 failed**. See the testing note in
-`BOTo_TASKS.md` — the suite must run without a populated `agent/.env`.
+**Canada pivot (2026-07-25):** the operator is in Canada and cannot sign up for
+Alpaca (US-only brokerage; its data/news API needs the same account). The Alpaca
+news tool and `us_equity` data loader added earlier were therefore **removed**
+and replaced with GDELT (news/sentiment, no signup). Market data uses the
+platform's existing no-key loaders (`yfinance` / `yahoo` / `stooq`); paper trading
+uses IBKR (`ibkr-paper-local`, already the default connector, works in Canada).
+The upstream Alpaca *connector* is left untouched (it is upstream code and inert
+without a key). Source count returned to 23.
+
+New tests: `test_webhook_tradingview.py` (6), `test_gdelt_news_tool.py` (6). Full
+hermetic suite: **6157 passed, 0 failed**. See the testing note in `BOTo_TASKS.md`
+— the suite must run without a populated `agent/.env`.
 
 The immediate motivation was a reported backtest "execution timeout" that was
 **not** an engine failure: the run produced complete, validated artifacts, but

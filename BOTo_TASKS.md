@@ -1,7 +1,7 @@
 # BOTo × Vibe-Trading — task list
 
 Working plan for adapting the Vibe-Trading platform to the operator's setup:
-local vLLM (Qwen) for reasoning, IBKR/Alpaca paper trading, SearXNG search,
+local vLLM (Qwen) for reasoning, IBKR paper trading, SearXNG search,
 free news/sentiment feeds, and TradingView webhook signals. The built-in
 backtest engine is kept (TradingView has no backtesting API — see Notes).
 
@@ -33,29 +33,43 @@ input · ⬜ planned.
   `GET /webhook/tradingview/signals`. 6/6 tests; all paths verified live with
   `curl`. Files: `agent/src/api/webhook_routes.py`, `agent/api_server.py`,
   `agent/src/config/env_schema.py`, `agent/tests/test_webhook_tradingview.py`.
-- [x] **Phase 2 — Alpaca news + sentiment tool** — `get_alpaca_news` (auto-
-  discovered BaseTool), real-time US news + coarse lexicon sentiment tag.
-  Self-disables without a key. Mock-tested. Files:
-  `agent/src/tools/alpaca_news_tool.py`, `agent/tests/test_alpaca_integrations.py`.
-  **Activates once you set** `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`.
-- [x] **Phase 3 — Alpaca market-data loader** — registered source `alpaca` for
-  `us_equity` (daily bars, IEX feed, paginated), in the fallback chain after the
-  other key-gated REST sources. Mock-tested. Files:
-  `agent/backtest/loaders/alpaca_loader.py`, `agent/backtest/loaders/registry.py`,
-  `agent/SKILL.md` (source count 23→24), test_registry / manifest updated.
-  **Activates once you set** the Alpaca key.
+- [x] **Phase 2 — GDELT news + sentiment tool** *(replaced Alpaca — see Canada
+  note)*. `get_gdelt_news` (auto-discovered BaseTool): global news + GDELT's own
+  aggregate "tone" sentiment, **no API key, no signup, works from Canada**.
+  Rate-limit tolerant (429 → returns articles, degrades tone gracefully).
+  Mock-tested + verified live. File: `agent/src/tools/gdelt_news_tool.py`,
+  `agent/tests/test_gdelt_news_tool.py`.
+- [x] **Phase 3 — Market data: already covered, no US signup needed.** The
+  platform ships Canada-accessible loaders that need no key —
+  `yfinance` / `yahoo` / `stooq` (US + intl equities) — plus optional free
+  *international*-signup keys (`finnhub`, `alphavantage`, `tiingo`, `fmp`). The
+  Alpaca data loader was removed (US-only account). No build needed.
+
+---
+
+## 🇨🇦 Canada note (2026-07-25)
+
+Alpaca brokerage — and its data/news API, which needs the same account — is
+**US-only**, so it was removed. The stack now uses only Canada-accessible pieces:
+
+| Need | Canada-friendly choice | Signup? |
+|---|---|---|
+| Paper trading | **IBKR** (`ibkr-paper-local`, already default) | IBKR works in Canada |
+| Market data | `yfinance` / `yahoo` / `stooq` (built in) | none |
+| News + sentiment | **GDELT** (`get_gdelt_news`) | none |
+| Web search | **SearXNG** (your instance) | none |
+| Signals | **TradingView webhooks** | none |
+| Optional extra data | Finnhub / AlphaVantage / Tiingo / FMP | free, *international* |
 
 ---
 
 ## ⛔ Still blocked on an input from you
 
-- [ ] **Phase 5 — Verify paper connectors end-to-end.** (Code is ready; these are
-  live-verification steps.)
-  - Alpaca (`alpaca-paper` connector + the new news tool + data loader) —
-    **needs** a free key: `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` in
-    `agent/.env`. → <https://alpaca.markets> (paper keys suffice).
-  - IBKR (`ibkr-paper-local`, already the default connector) — **needs** TWS /
-    IB Gateway running on paper port `7497` with the API enabled.
+- [ ] **Phase 5 — Verify IBKR paper trading end-to-end.** (Code is ready; this is
+  a live-verification step.) IBKR (`ibkr-paper-local`, already the default
+  connector, works in Canada) — **needs** TWS / IB Gateway running on paper port
+  `7497` with the API enabled. Everything else (search, news/sentiment, data,
+  webhooks) needs no further input and is live now.
 
 ---
 
@@ -92,9 +106,10 @@ Verified this pass: **6158 passed, 13 skipped, 0 failed** (hermetic).
   browser; scraping violates ToS. Decision: keep Vibe-Trading's own (working)
   backtest engine, and use TradingView **webhook alerts** for live signals
   (Phase 4). This was chosen over the ToS-gray `tradingview-ta` ratings scrape.
-- **Free APIs selected:** Alpaca (trading + data + news). GDELT / Finnhub /
-  Alpha Vantage were considered but not selected — GDELT (no key) remains a
-  zero-cost add later if broader news breadth is wanted.
+- **Free APIs:** Alpaca was the first pick but is US-only; replaced by **GDELT**
+  (news/sentiment, no signup) after the Canada constraint surfaced. Finnhub /
+  AlphaVantage / Tiingo / FMP remain available as optional free international-
+  signup data keys the platform already supports.
 - **Search:** SearXNG is primary; ddgs remains the automatic fallback.
 - **Everything stays local** with the vLLM setup — prompts, generated code, and
   results never leave the box; only public market-data/news fetches go out.

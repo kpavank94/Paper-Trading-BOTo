@@ -171,12 +171,6 @@ class DataConfig(_EnvBase):
     aliyun_iqs_api_key: str = Field(alias="ALIYUN_IQS_API_KEY", default="")
     searxng_url: str = Field(alias="SEARXNG_URL", default="")
     searxng_timeout_s: float = Field(alias="SEARXNG_TIMEOUT_S", default=10.0)
-    # Alpaca market-data API (news + bars). Free with a paper account; the IEX
-    # feed needs no paid subscription. Distinct from the connector's trading
-    # credential (which uses the TAP credential store) — these read public data.
-    apca_api_key_id: str = Field(alias="APCA_API_KEY_ID", default="")
-    apca_api_secret_key: str = Field(alias="APCA_API_SECRET_KEY", default="")
-    apca_data_feed: str = Field(alias="APCA_DATA_FEED", default="iex")
     qveris_api_key: str = Field(alias="QVERIS_API_KEY", default="")
     qveris_base_url: str = Field(alias="QVERIS_BASE_URL", default="")
     rsshub_base_url: str = Field(alias="RSSHUB_BASE_URL", default="")
