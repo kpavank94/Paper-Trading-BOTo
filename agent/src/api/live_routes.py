@@ -731,6 +731,16 @@ def register_live_routes(
 
         all_brokers = sorted(set(_known_live_brokers()) | set(_live_broker_sdk_connectors()))
 
+        # UI allowlist: hide unused brokers from Runtime. Empty = show all.
+        try:
+            from src.config.accessor import get_env_config
+
+            _allow = {c.strip().lower() for c in get_env_config().api.vibe_trading_enabled_connectors.split(",") if c.strip()}
+            if _allow:
+                all_brokers = [b for b in all_brokers if b in _allow]
+        except Exception:
+            pass
+
         if broker is not None:
             target = broker.strip().lower()
             if not target:

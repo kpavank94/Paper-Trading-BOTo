@@ -262,6 +262,14 @@ class APIConfig(_EnvBase):
         alias="VIBE_TRADING_API_URL", default="http://127.0.0.1:8000",
     )
     futu_trade_pwd_md5: str = Field(alias="FUTU_TRADE_PWD_MD5", default="")
+    # UI allowlists — comma-separated. Empty = show everything (upstream default).
+    # Hide unused brokers/providers from Runtime/Settings without deleting code.
+    vibe_trading_enabled_connectors: str = Field(
+        alias="VIBE_TRADING_ENABLED_CONNECTORS", default="",
+    )
+    vibe_trading_enabled_llm_providers: str = Field(
+        alias="VIBE_TRADING_ENABLED_LLM_PROVIDERS", default="",
+    )
     # TradingView webhook receiver. The secret gates the /webhook/tradingview
     # endpoint (fail-closed: unset => the endpoint refuses every request). The
     # receiver is advisory-only — it records signals; it never places orders.

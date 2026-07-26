@@ -45,8 +45,25 @@ def config_path() -> Path:
 
 
 def list_profiles() -> list[TradingProfile]:
-    """Return built-in trading connector profiles."""
-    return list(BUILTIN_PROFILES)
+    """Return built-in trading connector profiles, honoring the UI allowlist.
+
+    ``VIBE_TRADING_ENABLED_CONNECTORS`` (comma-separated connector keys, e.g.
+    ``ibkr``) hides unused brokers from Runtime/Settings/CLI without deleting any
+    code. Empty (the default) returns every profile — upstream behavior. The
+    default profile's connector is always kept so selection can never break, and
+    ``profile_by_id`` still resolves hidden ids directly from ``BUILTIN_PROFILES``.
+    """
+    try:
+        from src.config.accessor import get_env_config
+
+        raw = get_env_config().api.vibe_trading_enabled_connectors
+    except Exception:
+        raw = ""
+    allow = {c.strip().lower() for c in raw.split(",") if c.strip()}
+    if not allow:
+        return list(BUILTIN_PROFILES)
+    allow.add(DEFAULT_PROFILE_ID.split("-", 1)[0])  # never hide the default broker
+    return [p for p in BUILTIN_PROFILES if p.connector.lower() in allow]
 
 
 def profile_by_id(profile_id: str | None = None) -> TradingProfile:

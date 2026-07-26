@@ -117,6 +117,31 @@ def _load_llm_providers() -> List[LLMProviderOption]:
     return providers
 
 
+def _visible_llm_providers() -> List[LLMProviderOption]:
+    """Providers to show in the Settings UI, honoring the optional allowlist.
+
+    ``VIBE_TRADING_ENABLED_LLM_PROVIDERS`` (comma-separated) trims the dropdown to
+    the providers actually used; empty = show all (upstream default). The active
+    ``LANGCHAIN_PROVIDER`` is always kept so the configured provider never
+    vanishes. Filters only the UI list — ``LLM_PROVIDER_BY_NAME`` keeps every
+    provider for config resolution/validation. Read at request time so the env is
+    reliably loaded.
+    """
+    try:
+        from src.config.accessor import get_env_config
+
+        cfg = get_env_config()
+        allow = {p.strip().lower() for p in cfg.api.vibe_trading_enabled_llm_providers.split(",") if p.strip()}
+        if allow:
+            allow.add(cfg.llm.langchain_provider.strip().lower())
+            filtered = [p for p in LLM_PROVIDERS if p.name.lower() in allow]
+            if filtered:
+                return filtered
+    except Exception:
+        pass
+    return LLM_PROVIDERS
+
+
 LLM_PROVIDERS = _load_llm_providers()
 LLM_PROVIDER_BY_NAME = {provider.name: provider for provider in LLM_PROVIDERS}
 LLM_REASONING_EFFORTS = {"", "low", "medium", "high", "max"}
@@ -217,7 +242,7 @@ def _build_llm_settings_response(
         reasoning_effort=env_values.get("LANGCHAIN_REASONING_EFFORT", "").strip().lower(),
         sse_timeout_seconds=host._coerce_int(env_values.get("VIBE_TRADING_SSE_TIMEOUT", "90"), 90),
         env_path=host._project_relative_path(host.ENV_PATH),
-        providers=LLM_PROVIDERS,
+        providers=_visible_llm_providers(),
     )
 
 
