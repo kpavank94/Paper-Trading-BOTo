@@ -60,9 +60,22 @@ installable Android app, reaching the backend over Tailscale.
   Already ruled out: Ubuntu's arm64 `android-sdk-build-tools` is an empty
   metapackage, its `aapt` is v1 (unusable by AGP 8.x), and Docker — usable
   without sudo — cannot run amd64 images because no qemu binfmt handler is
-  registered. Getting an APK needs one of: privileged `tonistiigi/binfmt`
-  registration (root-equivalent, system-wide), a GitHub Actions build, or an
-  x86-64 machine. See `android-app/README.md`.
+  registered. See `android-app/README.md`.
+- **APK now builds in CI** (`.github/workflows/android-apk.yml`, x86-64
+  runners). First green run 2026-08-06; artifact `boto-trading-debug-apk`,
+  6.7 MB, debug-signed, verified to carry `allowBackup=false`, the network
+  security config, and `targetSdk` 35. Branch `feat/android-capacitor-app` is
+  **pushed** to origin (operator asked for the CI build in that session).
+- **This repository is public.** The APK deliberately ships with **no** backend
+  address: workflow inputs and artifacts are world-readable, so a baked-in
+  tailnet URL would be published. The shim renders a first-run setup screen and
+  stores the address on the device; a CI step greps the APK to enforce this.
+  Tailnet identifiers were scrubbed from all tracked files and from the
+  branch's (then-unpushed) history before the first push — keep them out.
+  `BOTO_API_BASE` still bakes an address in for local builds only.
+- The workflow carries a temporary push trigger scoped to this branch, because
+  `workflow_dispatch` only works once the file is on the default branch. Drop
+  it when this merges to `main`.
 
 ## Safety defaults
 
