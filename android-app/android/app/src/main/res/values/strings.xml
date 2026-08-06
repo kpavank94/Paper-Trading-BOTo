@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">BOTo Trading</string>
+    <string name="title_activity_main">BOTo Trading</string>
+    <string name="package_name">com.boto.papertrading</string>
+    <string name="custom_url_scheme">com.boto.papertrading</string>
+</resources>

@@ -1,0 +1,11 @@
+{
+  "appId": "com.boto.papertrading",
+  "appName": "BOTo Trading",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "http"
+  }
+}

@@ -25,6 +25,45 @@ See `BOTo_MIGRATION.md`. Do not mark build/test items complete without fresh com
 
 **All gates closed 2026-07-24.** The platform was adopted onto `main` at the operator's explicit request: `main`'s tree is now byte-identical to the parity branch (merge with both parents, no force-push), `legacy/` was removed, and the dependency lock was reconciled and adopted. Hardened Docker build succeeds and `/live` is loopback-only; 1,861 of 1,862 upstream files remain byte-identical (sole deviation: `requirements-lock.txt`); security review recorded one accepted advisory (`setuptools==82.0.1`, sdist/macOS-only, pinned exactly by `ccxt`). Details and evidence in `BOTo_MIGRATION.md` under "Adoption".
 
+## Android app (`android-app/`, branch `feat/android-capacitor-app`)
+
+Added 2026-08-05. Capacitor wrapper that packages the existing SPA as an
+installable Android app, reaching the backend over Tailscale.
+
+- **Upstream parity is intact.** Nothing under `frontend/` and no backend code
+  was modified — `git status --porcelain frontend/` is empty. `android-app/build.mjs`
+  runs the frontend's own `npm run build` unchanged and copies `dist/` into its
+  own web root. The `BASE = ""` problem in `src/lib/api.ts` is solved at runtime
+  by `android-app/shim/api-base.js`, which patches `fetch`/`EventSource` before
+  the app bundle evaluates, rather than by editing that file.
+- **The phone is an untrusted remote client by design.** The backend binds to
+  the Tailscale IP, so requests arrive from a `100.x.x.x`
+  address, `_is_local_client()` is False, the API key is enforced, and `/live`
+  stays blocked by the loopback gate. **Do not switch this to `tailscale serve`**
+  — it proxies from `127.0.0.1`, which would make every phone request look
+  loopback-local and hand the whole tailnet an auth bypass plus `/live` access.
+  Correspondingly, leave `API_ALLOWED_HOSTS` unset.
+- Backend needs only env config: `VIBE_TRADING_API_KEY` and a `CORS_ORIGINS`
+  that includes `http://localhost` (the Capacitor WebView origin).
+- Verified: `npm test` in `android-app/` is 8/8; the frontend build, web-root
+  assembly, shim injection, and `cap sync android` all run clean.
+- Toolchain installed 2026-08-05: Temurin **JDK 21** at `~/tools/jdk-21.0.12+8`
+  and the **Android SDK** at `~/Android/Sdk` (platform 35, build-tools 35.0.0,
+  platform-tools). Both work.
+- **The APK cannot be compiled on this host, and this is not fixable by
+  configuration.** this host is **aarch64**; Google ships `aapt2`, `aapt`,
+  `zipalign` and `adb` as **x86-64 binaries only**, with no ARM64 build on
+  Google's Maven. `./gradlew assembleDebug` runs **77/77 tasks** and fails at
+  exactly one — `:app:processDebugResources` — with
+  `aapt2: 1: Syntax error: "(" unexpected` (an x86-64 ELF being run as a shell
+  script). The wrapper is sound; only resource compilation is blocked.
+  Already ruled out: Ubuntu's arm64 `android-sdk-build-tools` is an empty
+  metapackage, its `aapt` is v1 (unusable by AGP 8.x), and Docker — usable
+  without sudo — cannot run amd64 images because no qemu binfmt handler is
+  registered. Getting an APK needs one of: privileged `tonistiigi/binfmt`
+  registration (root-equivalent, system-wide), a GitHub Actions build, or an
+  x86-64 machine. See `android-app/README.md`.
+
 ## Safety defaults
 
 - Keep shell tools disabled (`VIBE_TRADING_ENABLE_SHELL_TOOLS` unset).

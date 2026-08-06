@@ -1,0 +1,16 @@
+# Assembled from ../frontend/dist by build.mjs — never edit or commit.
+www/
+
+node_modules/
+
+# Capacitor-generated native project. Regenerate with `npx cap add android`.
+# Committed selectively: see README.md ("Regenerating the native project").
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/.idea/
+android/app/release/
+*.apk
+*.aab
+*.keystore

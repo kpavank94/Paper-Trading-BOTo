@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is denied everywhere by default, then re-permitted for exactly two
+  destinations:
+
+    * localhost  — the Capacitor WebView's own origin. ``androidScheme`` is set
+      to "http" in capacitor.config.json so the bundled app is served from
+      ``http://localhost``. Serving it over https instead would make every
+      request to a cleartext tailnet backend a blocked mixed-content request.
+
+    * ``ts.net`` — Tailscale's MagicDNS domain, i.e. the backend. Traffic to it
+      is carried inside WireGuard, so it never touches the local wifi or the
+      public internet in the clear.
+
+  ``ts.net`` is used rather than a specific tailnet name so this file carries no
+  private network identifiers (this is a public repository). Narrow it to your
+  own ``<tailnet>.ts.net`` if you want the exemption to be tighter.
+
+  Everything else on the device stays cleartext-denied.
+
+  To drop the cleartext exemption entirely, terminate TLS on the backend with a
+  ``tailscale cert`` certificate and switch androidScheme back to "https" — see
+  "Upgrading to TLS" in README.md.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">ts.net</domain>
+    </domain-config>
+</network-security-config>
