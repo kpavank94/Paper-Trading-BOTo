@@ -4,8 +4,19 @@ name: Android APK
 # workflow inputs and artifacts are world-readable on a public repository, so
 # baking in a private tailnet URL would publish it. The app asks for the backend
 # address on first launch and stores it on the device.
+#
+# workflow_dispatch only becomes usable once this file reaches the default
+# branch — GitHub will not dispatch a workflow it cannot see there. The scoped
+# push trigger lets the feature branch build in the meantime; it can be dropped
+# after this merges to main.
 on:
   workflow_dispatch:
+  push:
+    branches: [feat/android-capacitor-app]
+    paths:
+      - "android-app/**"
+      - "frontend/**"
+      - ".github/workflows/android-apk.yml"
 
 jobs:
   build:
